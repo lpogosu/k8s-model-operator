@@ -1,0 +1,20 @@
+# Build output and downloaded tooling
+bin/
+dist/
+.toolcache/
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Local kubeconfigs and secrets
+kubeconfig
+*.kubeconfig
+.env
