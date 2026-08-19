@@ -1,0 +1,506 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: modeldeployments.serving.lpogosu.dev
+spec:
+  group: serving.lpogosu.dev
+  names:
+    kind: ModelDeployment
+    listKind: ModelDeploymentList
+    plural: modeldeployments
+    shortNames:
+    - md
+    - modeldep
+    singular: modeldeployment
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.model.name
+      name: Model
+      type: string
+    - jsonPath: .spec.runtime.engine
+      name: Engine
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="WeightsCached")].status
+      name: Cached
+      type: string
+    - jsonPath: .status.replicas
+      name: Replicas
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ModelDeployment serves a single model with a single runtime configuration.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ModelDeploymentSpec is the desired state of a served model.
+            properties:
+              autoscaling:
+                description: Autoscaling enables queue-depth scaling. Nil means a
+                  fixed replica count.
+                properties:
+                  maxReplicas:
+                    description: |-
+                      MaxReplicas is the ceiling. On GPU nodes this is usually the number of
+                      GPUs available, not a load estimate.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  maxScaleUpStep:
+                    default: 2
+                    description: |-
+                      MaxScaleUpStep bounds how many replicas may be added at once. Each replica
+                      claims a GPU, so an unbounded jump on a metric spike is an expensive way to
+                      discover that the metric was wrong.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  metricName:
+                    default: vllm:num_requests_waiting
+                    description: |-
+                      MetricName is the custom metric served by the metrics adapter. The default
+                      is the counter vLLM exports; Ollama does not export an equivalent.
+                    type: string
+                  minReplicas:
+                    default: 1
+                    description: |-
+                      MinReplicas is the floor. Zero is allowed and means the deployment scales
+                      to nothing when idle, at the cost of a cold start on the next request.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  scaleDownStabilizationSeconds:
+                    default: 900
+                    description: |-
+                      ScaleDownStabilizationSeconds is the same for scaling down. Kept long: a
+                      removed replica costs minutes to bring back, so flapping is expensive in a
+                      way it is not for stateless HTTP services.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  scaleUpStabilizationSeconds:
+                    default: 60
+                    description: |-
+                      ScaleUpStabilizationSeconds is the minimum age of the last scaling change
+                      before scaling up again. Kept short: a queue that is growing costs latency
+                      on every request in it.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  targetQueueDepth:
+                    default: 4
+                    description: |-
+                      TargetQueueDepth is how many requests may wait per replica before another
+                      replica is added. This is the scaling signal: the runtime's own count of
+                      requests admitted but not yet generating.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                required:
+                - maxReplicas
+                type: object
+              disruption:
+                default: {}
+                description: Disruption configures the PodDisruptionBudget.
+                properties:
+                  minAvailable:
+                    default: 1
+                    description: |-
+                      MinAvailable is how many replicas must survive a voluntary disruption such
+                      as a node drain. It is capped at Replicas-1 by the controller, because a
+                      budget that can never be satisfied blocks drains forever.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              model:
+                description: Model identifies the weights.
+                properties:
+                  name:
+                    description: |-
+                      Name is the model identifier passed to the runtime, for example
+                      "Qwen/Qwen2.5-7B-Instruct" for vLLM or "llama3.1:8b" for Ollama.
+                    minLength: 1
+                    type: string
+                  revision:
+                    default: main
+                    description: |-
+                      Revision pins the model version. For Hugging Face repositories this is a
+                      branch, tag or commit SHA. Changing it changes the cache key, which is the
+                      only way the operator can tell two sets of weights apart.
+                    type: string
+                  secretRef:
+                    description: |-
+                      SecretRef names a Secret whose keys are exposed to the runtime and to the
+                      warm-up Job as environment variables. Use it for HF_TOKEN on gated models.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                required:
+                - name
+                type: object
+              replicas:
+                default: 1
+                description: |-
+                  Replicas is the desired replica count and the only place it is stored.
+                  With Autoscaling set the operator writes its own decision back here, the
+                  way a HorizontalPodAutoscaler writes to a Deployment: one number, visible
+                  in `kubectl get`, reachable through the scale subresource.
+                format: int32
+                minimum: 0
+                type: integer
+              runtime:
+                default: {}
+                description: Runtime configures the inference server.
+                properties:
+                  engine:
+                    default: vllm
+                    description: |-
+                      Engine selects the inference server. It changes the default image, the
+                      serving arguments and the health endpoint.
+                    enum:
+                    - vllm
+                    - ollama
+                    type: string
+                  extraArgs:
+                    description: |-
+                      ExtraArgs are appended to the generated runtime arguments, after them, so
+                      they win on duplicate flags.
+                    items:
+                      type: string
+                    type: array
+                  image:
+                    description: |-
+                      Image overrides the container image. It must be pinned by digest in any
+                      environment where reproducibility matters; the built-in defaults are tags.
+                    type: string
+                  loadTimeoutSeconds:
+                    default: 900
+                    description: |-
+                      LoadTimeoutSeconds bounds how long a pod may spend loading weights into GPU
+                      memory before it is declared broken. It becomes the startup probe budget,
+                      so it must exceed the real load time of the largest model served here.
+                    format: int32
+                    minimum: 30
+                    type: integer
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: NodeSelector constrains serving pods, typically to
+                      a GPU node pool.
+                    type: object
+                  port:
+                    default: 8000
+                    description: Port is the port the runtime listens on.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  resources:
+                    description: |-
+                      Resources are the requests and limits of the serving container. GPUs are
+                      requested through the usual extended resource, for example
+                      "nvidia.com/gpu: 1" — the operator does not invent its own GPU field.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  tolerations:
+                    description: Tolerations let serving pods land on tainted GPU
+                      nodes.
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    type: array
+                type: object
+              weightCache:
+                description: |-
+                  WeightCache configures the shared weight volume. Nil disables it, and then
+                  every pod downloads the weights into its own emptyDir — correct, but it
+                  costs the full download on every scale-up. It is not enabled by default
+                  because it requires a ReadWriteMany storage class, which a default cluster
+                  does not have.
+                properties:
+                  existingClaimName:
+                    description: |-
+                      ExistingClaimName reuses a PersistentVolumeClaim instead of creating one.
+                      The claim is not owned by the ModelDeployment and survives its deletion,
+                      which is the point: several ModelDeployments can share one cache.
+                    type: string
+                  mountPath:
+                    default: /models
+                    description: MountPath is where the cache is mounted in the runtime
+                      and warm-up pods.
+                    type: string
+                  size:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      Size is the requested capacity of the cache volume. It must hold every
+                      revision that is still referenced, not just the current one. Required
+                      unless ExistingClaimName is used.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  storageClassName:
+                    description: |-
+                      StorageClassName selects the storage class. It has to provide
+                      ReadWriteMany, otherwise only one node can mount the cache and scale-up
+                      stops at that node's capacity.
+                    type: string
+                  warmImage:
+                    description: |-
+                      WarmImage runs the download Job. It defaults to the runtime image, which
+                      already contains the client libraries needed to fetch the weights.
+                    type: string
+                  warmTimeoutSeconds:
+                    default: 3600
+                    description: WarmTimeoutSeconds fails the warm-up Job if the download
+                      takes longer.
+                    format: int32
+                    minimum: 60
+                    type: integer
+                type: object
+                x-kubernetes-validations:
+                - message: either size or existingClaimName must be set
+                  rule: has(self.size) || has(self.existingClaimName)
+            required:
+            - model
+            type: object
+          status:
+            description: ModelDeploymentStatus is the observed state.
+            properties:
+              cacheKey:
+                description: |-
+                  CacheKey identifies the weights currently being served. It changes when
+                  the model, its revision or the engine changes, and that change is what
+                  invalidates the cache and triggers a new warm-up.
+                type: string
+              conditions:
+                description: Conditions carries Ready, WeightsCached and Degraded.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              endpoint:
+                description: Endpoint is the in-cluster address of the OpenAI-compatible
+                  API.
+                type: string
+              lastScaleTime:
+                description: |-
+                  LastScaleTime is when the operator last changed the replica count. The
+                  stabilization windows are measured from it.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the spec generation this status was computed from.
+                  Anything comparing status to spec must check it first.
+                format: int64
+                type: integer
+              observedQueueDepth:
+                description: ObservedQueueDepth is the last queue depth read from
+                  the metrics adapter.
+                format: int32
+                type: integer
+              readyReplicas:
+                description: ReadyReplicas is how many of them serve traffic.
+                format: int32
+                type: integer
+              replicas:
+                description: |-
+                  Replicas is how many pods the Deployment reports. It is the status half of
+                  the scale subresource, so it must count real pods, not intentions.
+                format: int32
+                type: integer
+              selector:
+                description: |-
+                  Selector is the label selector of the serving pods, in the string form the
+                  scale subresource requires.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      scale:
+        labelSelectorPath: .status.selector
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.replicas
+      status: {}
