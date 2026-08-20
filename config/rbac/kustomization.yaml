@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - service_account.yaml
+  # role.yaml is generated from the kubebuilder:rbac markers on the reconciler,
+  # so the permissions the operator asks for cannot drift from the ones it uses.
+  - role.yaml
+  - role_binding.yaml
+  - leader_election_role.yaml
+  - leader_election_role_binding.yaml
