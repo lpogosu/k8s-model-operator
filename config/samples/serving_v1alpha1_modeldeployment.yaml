@@ -1,0 +1,62 @@
+# The shape this operator is built for: a large model on a shared cache, scaled
+# by how many requests are waiting rather than by CPU.
+apiVersion: serving.lpogosu.dev/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: qwen-7b
+  namespace: inference
+spec:
+  model:
+    name: Qwen/Qwen2.5-7B-Instruct
+    # A branch would let the weights change underneath a warm cache without the
+    # cache key noticing. A commit cannot.
+    revision: bb46c15ee4bb56c5b63245ef50fd7637234d6f75
+    secretRef:
+      name: huggingface-token
+
+  runtime:
+    engine: vllm
+    image: vllm/vllm-openai:v0.11.0
+    extraArgs:
+      - --max-model-len
+      - "8192"
+      - --gpu-memory-utilization
+      - "0.90"
+    loadTimeoutSeconds: 900
+    resources:
+      limits:
+        nvidia.com/gpu: "1"
+        memory: 48Gi
+      requests:
+        cpu: "4"
+        memory: 32Gi
+        nvidia.com/gpu: "1"
+    nodeSelector:
+      nvidia.com/gpu.product: NVIDIA-A100-SXM4-40GB
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+
+  replicas: 2
+
+  weightCache:
+    # ReadWriteMany is mandatory: one Job writes the weights, every replica reads
+    # them, and they will not all land on the same node.
+    storageClassName: nfs-rwx
+    size: 300Gi
+    mountPath: /models
+    warmTimeoutSeconds: 3600
+
+  autoscaling:
+    minReplicas: 2
+    maxReplicas: 8
+    targetQueueDepth: 4
+    metricName: vllm:num_requests_waiting
+    scaleUpStabilizationSeconds: 60
+    # Fifteen minutes, because bringing a replica back costs minutes, not seconds.
+    scaleDownStabilizationSeconds: 900
+    maxScaleUpStep: 2
+
+  disruption:
+    minAvailable: 1

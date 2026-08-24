@@ -1,0 +1,24 @@
+# The other end of the range: a small model, no shared cache, no autoscaling.
+# Every pod downloads its own copy into an emptyDir, which is the right trade
+# when the model is a few gigabytes and the cluster has no ReadWriteMany storage.
+apiVersion: serving.lpogosu.dev/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: llama-8b-dev
+  namespace: inference
+spec:
+  model:
+    # Ollama has no revision concept; the version is part of the tag.
+    name: llama3.1:8b
+  runtime:
+    engine: ollama
+    port: 11434
+    loadTimeoutSeconds: 600
+    resources:
+      limits:
+        nvidia.com/gpu: "1"
+      requests:
+        cpu: "2"
+        memory: 16Gi
+        nvidia.com/gpu: "1"
+  replicas: 1
