@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Actions are pinned by commit, not by tag: a tag can be moved onto different
+# code by whoever owns the repository.
+
+jobs:
+  generated:
+    name: generated files are current
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # The CRD schema and the RBAC role are derived from the Go types and the
+      # kubebuilder markers. Committing them is convenient; letting them drift
+      # from the code is how an operator ends up asking for permissions it does
+      # not use and rejecting fields it does.
+      - run: make check-generated
+
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make vet
+      - run: make lint
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # `make test` downloads a real apiserver and etcd through setup-envtest and
+      # runs the reconciler against them. There is no mocked client in this job.
+      - run: make test
+
+  manifests:
+    name: manifests render
+    runs-on: ubuntu-24.04
+    env:
+      KUSTOMIZE_VERSION: v5.8.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install kustomize
+        run: |
+          curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin kustomize
+      - name: render the deployment overlay and the samples
+        run: |
+          kustomize build config/default > rendered-default.yaml
+          kustomize build config/samples > rendered-samples.yaml
+          test -s rendered-default.yaml
+          test -s rendered-samples.yaml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rendered-manifests
+          path: rendered-*.yaml
+
+  image:
+    name: image builds
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Built, not pushed: this repository has no registry behind it, and a build
+      # that only ever runs on a laptop is a build that breaks quietly.
+      - run: docker build -t k8s-model-operator:ci .
